@@ -293,80 +293,76 @@ contains
   subroutine m2l_single(sys, si, sj, ti, tj)
     type(multipole_system), intent(inout) :: sys
     integer, intent(in) :: si, sj, ti, tj
-    integer :: k, j
-    real(dp) :: dx, dy, r, binom_coef
-    complex(dp) :: z0, z0_scaled, z0_inv_scaled, z0_pow
-    complex(dp) :: temp_sum, z0_inv_pow_j, z0_inv_pow_jk
+    integer :: k, j, kk
+    real(dp) :: dx, dy, rtmp, binom_coef
+    complex(dp) :: z0, z0inv, z0pow1, z0pow2
+    complex(dp) :: temp_M(0:sys%p_max), temp_L(0:sys%p_max)
+    complex(dp) :: ztemp1, ztemp2, ztemp3
 
-    ! IMPLEMENTATION based on Flatiron Institute fmm2d library
-    ! with GLOBAL rscale normalization for numerical stability
+    ! CORRECT IMPLEMENTATION from Flatiron Institute fmm2d library
+    ! File: laprouts2d.f, subroutine l2dmploc (line 1130)
     !
-    ! Key insight: When both M_k and z0 are normalized by the SAME rscale,
-    ! the formulas are identical to the unnormalized version!
+    ! Key differences from previous version:
+    ! 1. z0 = -(center2 - center1) where center2=target, center1=source
+    ! 2. Separate z0pow1 and z0pow2 with different normalizations
+    ! 3. Pre-multiply M by z0pow1, then use for L computation
 
-    ! z0 = z_s - z_t (from source to target)
-    dx = sys%cells(si,sj)%center_x - sys%cells(ti,tj)%center_x
-    dy = sys%cells(si,sj)%center_y - sys%cells(ti,tj)%center_y
-    z0 = cmplx(dx, dy, dp)
-    r = abs(z0)
-    if (r < EPS) return
+    ! Vector from source to target
+    dx = sys%cells(ti,tj)%center_x - sys%cells(si,sj)%center_x
+    dy = sys%cells(ti,tj)%center_y - sys%cells(si,sj)%center_y
+    z0 = -cmplx(dx, dy, dp)  ! NEGATIVE! (as in fmm2d)
 
-    ! Normalize translation vector by GLOBAL rscale
-    z0_scaled = z0 / sys%rscale
-    z0_inv_scaled = 1.0_dp / z0_scaled
+    if (abs(z0) < EPS) return
 
-    ! ========================================================================
-    ! Compute L_0
-    ! ========================================================================
-    ! CORRECT formula for 2D logarithmic kernel:
-    ! L_0 = M_0 * (-log|z0/rscale|) + Σ_{k=1}^p M_k * (z0/rscale)^k
-    !
-    ! Key insight: For log kernel, the multipole moments contribute to L_0
-    ! through powers of z0 (not just sum of M_k).
-    ! Reference: Greengard & Rokhlin (1987), fmm2d library
+    z0inv = 1.0_dp / z0
 
-    ! Monopole contribution: M_0 * (-log|z0|)  <-- NEGATIVE SIGN!
-    sys%cells(ti,tj)%L(0) = sys%cells(ti,tj)%L(0) - &
-                           sys%cells(si,sj)%M(0) * log(abs(z0_scaled))
+    ! Precompute power sequences (as in fmm2d)
+    ztemp1 = z0inv
+    ztemp2 = z0inv * sys%rscale
+    ztemp3 = -z0inv * sys%rscale
 
-    ! Higher moments: Σ M_k * z0^k
-    z0_pow = z0_scaled
+    ! Transform multipole: temp_M(k) = M(k) * z0pow1(k)
+    ! z0pow1(k) = (-1/z0 * rscale)^k
+    temp_M(0) = sys%cells(si,sj)%M(0)
+    z0pow1 = ztemp3
     do k = 1, sys%p_max
-      sys%cells(ti,tj)%L(0) = sys%cells(ti,tj)%L(0) + &
-                             sys%cells(si,sj)%M(k) * z0_pow
-      z0_pow = z0_pow * z0_scaled
+      temp_M(k) = sys%cells(si,sj)%M(k) * z0pow1
+      z0pow1 = -z0pow1 * ztemp1 * sys%rscale
     end do
 
-    ! ========================================================================
-    ! Compute L_j for j ≥ 1
-    ! ========================================================================
-    ! CORRECT formula for 2D logarithmic kernel:
-    ! L_j = -M_0/(j·z0^j) + Σ_{k=1}^p M_k · C(j+k-1,k-1) / z0^(j+k)
-    !
-    ! Critical: The power in denominator is (j+k), not just j!
-    ! Reference: Beatson & Greengard FMM course, fmm2d library
+    ! Compute L_0: M_0*log|z0| + Σ_{k=1}^p temp_M(k)
+    rtmp = log(abs(z0))
+    temp_L(0) = temp_M(0) * rtmp
 
-    z0_inv_pow_j = z0_inv_scaled  ! (1/z0)^1 for j=1
+    do k = 1, sys%p_max
+      temp_L(0) = temp_L(0) + temp_M(k)
+    end do
+
+    ! Compute L_j (j ≥ 1)
     do j = 1, sys%p_max
-      ! Monopole contribution: -M_0 / (j * z0^j)
-      temp_sum = -sys%cells(si,sj)%M(0) * z0_inv_pow_j / real(j, dp)
+      ! Start with monopole term
+      temp_L(j) = -temp_M(0) / real(j, dp)
 
-      ! Higher moment contributions: Σ M_k · C(j+k-1,k-1) / z0^(j+k)
-      z0_inv_pow_jk = z0_inv_pow_j * z0_inv_scaled  ! Start with (1/z0)^(j+1)
+      ! Add contributions from higher moments
       do k = 1, sys%p_max
         if (j + k - 1 <= ubound(sys%binomial, 1) .and. &
             k - 1 <= ubound(sys%binomial, 2)) then
           binom_coef = sys%binomial(j+k-1, k-1)
-          temp_sum = temp_sum + sys%cells(si,sj)%M(k) * binom_coef * z0_inv_pow_jk
+          temp_L(j) = temp_L(j) + temp_M(k) * binom_coef
         end if
-        z0_inv_pow_jk = z0_inv_pow_jk * z0_inv_scaled  ! Next power: (1/z0)^(j+k+1)
       end do
 
-      ! Add to L_j
-      sys%cells(ti,tj)%L(j) = sys%cells(ti,tj)%L(j) + temp_sum
+      ! Multiply by z0pow2(j) = (1/z0 * rscale)^j
+      z0pow2 = ztemp2
+      do kk = 2, j
+        z0pow2 = z0pow2 * ztemp1 * sys%rscale
+      end do
+      temp_L(j) = temp_L(j) * z0pow2
+    end do
 
-      ! Next j: advance (1/z0)^j power
-      z0_inv_pow_j = z0_inv_pow_j * z0_inv_scaled
+    ! INCREMENT local expansion (INCREMENTS, not replaces!)
+    do j = 0, sys%p_max
+      sys%cells(ti,tj)%L(j) = sys%cells(ti,tj)%L(j) + temp_L(j)
     end do
   end subroutine m2l_single
 
