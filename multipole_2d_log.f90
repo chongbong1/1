@@ -83,6 +83,8 @@ contains
     real(dp), intent(in) :: xmax, ymax
     integer, intent(in) :: nx, ny, p_max, max_part
     integer :: i, j, n, k
+    integer :: cell_capacity
+    real(dp) :: safety_factor
 
     sys%xmax = xmax
     sys%ymax = ymax
@@ -100,6 +102,14 @@ contains
     ! Allocate particle array
     allocate(sys%particles(max_part))
 
+    ! Calculate cell capacity based on particle count and grid size
+    safety_factor = 3.0_dp
+    cell_capacity = calculate_cell_capacity(max_part, nx*ny, safety_factor)
+
+    print '(A,I0)', ' Calculated cell capacity: ', cell_capacity
+    print '(A,I0)', ' Average particles/cell:   ', max_part/(nx*ny)
+    print '(A,F5.2)', ' Safety factor:            ', safety_factor
+
     ! Initialize cells
     allocate(sys%cells(nx, ny))
     do j = 1, ny
@@ -107,8 +117,8 @@ contains
         sys%cells(i,j)%center_x = -xmax + (i - 0.5_dp) * sys%dx_cell
         sys%cells(i,j)%center_y = -ymax + (j - 0.5_dp) * sys%dy_cell
         sys%cells(i,j)%n_particles = 0
-        sys%cells(i,j)%capacity = 500
-        allocate(sys%cells(i,j)%particle_ids(500))
+        sys%cells(i,j)%capacity = cell_capacity
+        allocate(sys%cells(i,j)%particle_ids(cell_capacity))
         allocate(sys%cells(i,j)%M(0:p_max))
         allocate(sys%cells(i,j)%L(0:p_max))
         sys%cells(i,j)%M = cmplx(0.0_dp, 0.0_dp, dp)
@@ -128,6 +138,20 @@ contains
       end do
     end do
   end subroutine init_system
+
+  ! ============================================================================
+
+  function calculate_cell_capacity(n_particles, n_cells, safety_factor) result(capacity)
+    integer, intent(in) :: n_particles, n_cells
+    real(dp), intent(in) :: safety_factor
+    integer :: capacity
+    integer :: avg_per_cell
+
+    avg_per_cell = ceiling(real(n_particles, dp) / real(n_cells, dp))
+    capacity = ceiling(real(avg_per_cell, dp) * safety_factor)
+    capacity = max(capacity, 100)    ! Minimum capacity
+    capacity = min(capacity, 50000)  ! Maximum capacity
+  end function calculate_cell_capacity
 
   ! ============================================================================
 
@@ -177,7 +201,19 @@ contains
     sys%particles(ip)%cell_i = ci
     sys%particles(ip)%cell_j = cj
 
-    ! Add to cell
+    ! Add to cell with capacity check
+    if (sys%cells(ci,cj)%n_particles >= sys%cells(ci,cj)%capacity) then
+      print '(A)', '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+      print '(A)', 'ERROR: Cell capacity exceeded in add_particle!'
+      print '(A,I0,A,I0)', '  Cell (', ci, ',', cj, ')'
+      print '(A,I0)', '  Current particles in cell: ', sys%cells(ci,cj)%n_particles
+      print '(A,I0)', '  Cell capacity:             ', sys%cells(ci,cj)%capacity
+      print '(A)', '  Solutions:'
+      print '(A)', '    1. Increase grid size (nx, ny)'
+      print '(A)', '    2. Reduce dt if particles move too far'
+      print '(A)', '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+      stop 1
+    end if
     sys%cells(ci,cj)%n_particles = sys%cells(ci,cj)%n_particles + 1
     sys%cells(ci,cj)%particle_ids(sys%cells(ci,cj)%n_particles) = ip
   end subroutine add_particle
@@ -671,6 +707,8 @@ contains
   subroutine update_cell_assignments(sys)
     type(multipole_system), intent(inout) :: sys
     integer :: i, ci, cj
+    integer :: overflow_count
+    logical :: capacity_exceeded
 
     ! Clear all cells
     do cj = 1, sys%ny_cells
@@ -678,6 +716,9 @@ contains
         sys%cells(ci,cj)%n_particles = 0
       end do
     end do
+
+    overflow_count = 0
+    capacity_exceeded = .false.
 
     ! Reassign particles
     do i = 1, sys%n_particles
@@ -692,8 +733,30 @@ contains
       sys%cells(ci,cj)%n_particles = sys%cells(ci,cj)%n_particles + 1
       if (sys%cells(ci,cj)%n_particles <= sys%cells(ci,cj)%capacity) then
         sys%cells(ci,cj)%particle_ids(sys%cells(ci,cj)%n_particles) = i
+      else
+        overflow_count = overflow_count + 1
+        capacity_exceeded = .true.
       end if
     end do
+
+    ! Report overflow error
+    if (capacity_exceeded) then
+      print '(A)', '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+      print '(A)', 'ERROR: Cell capacity exceeded during update!'
+      print '(A,I0)', '  Particles lost:   ', overflow_count
+      print '(A,I0)', '  Total particles:  ', sys%n_particles
+      print '(A)', ''
+      print '(A)', '  This usually happens when:'
+      print '(A)', '    - Particles cluster in one region'
+      print '(A)', '    - Time step is too large'
+      print '(A)', '    - Grid is too coarse'
+      print '(A)', ''
+      print '(A)', '  Solutions:'
+      print '(A)', '    1. Reduce time step (dt)'
+      print '(A)', '    2. Use finer grid (increase nx, ny)'
+      print '(A)', '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+      stop 1
+    end if
   end subroutine update_cell_assignments
 
   ! ============================================================================

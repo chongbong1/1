@@ -42,7 +42,7 @@ program main
   p_order = 20              ! Multipole expansion order (increased for accuracy)
 
   ! Particles - uniform distribution
-  n_per_side = 10           ! 10×10 = 100 particles (moderate test)
+  n_per_side = 10           ! 10×10 = 100 particles (default moderate test)
   n_particles = n_per_side * n_per_side
   max_particles = n_particles
 
