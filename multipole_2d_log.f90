@@ -41,6 +41,7 @@ module multipole_2d_log
   type :: particle
     real(dp) :: q           ! Charge (vortex strength)
     real(dp) :: x, y        ! Position
+    real(dp) :: vx, vy      ! Velocity
     real(dp) :: fx, fy      ! Force
     real(dp) :: phi         ! Potential
     integer  :: cell_i, cell_j  ! Cell indices
@@ -191,6 +192,8 @@ contains
     sys%particles(ip)%x = x
     sys%particles(ip)%y = y
     sys%particles(ip)%q = q
+    sys%particles(ip)%vx = 0.0_dp
+    sys%particles(ip)%vy = 0.0_dp
     sys%particles(ip)%fx = 0.0_dp
     sys%particles(ip)%fy = 0.0_dp
     sys%particles(ip)%phi = 0.0_dp
@@ -659,46 +662,40 @@ contains
     type(multipole_system), intent(inout) :: sys
     real(dp), intent(in) :: dt, eta
     integer :: i
-    real(dp) :: dx, dy, dr_max, x_new, y_new
-    real(dp) :: noise_x, noise_y
+    real(dp) :: x_new, y_new, vx_new, vy_new
 
-    ! Maximum displacement per step
-    dr_max = 0.01_dp
-
+    ! Simple Euler method: v(t+dt) = v(t) + F*dt, x(t+dt) = x(t) + v*dt
     do i = 1, sys%n_particles
-      ! Overdamped dynamics with noise
-      call random_number(noise_x)
-      call random_number(noise_y)
+      ! Update velocity: v_new = v + F*dt
+      vx_new = sys%particles(i)%vx + sys%particles(i)%fx * dt
+      vy_new = sys%particles(i)%vy + sys%particles(i)%fy * dt
 
-      dx = sys%particles(i)%fx * dt + eta * (noise_x - 0.5_dp)
-      dy = sys%particles(i)%fy * dt + eta * (noise_y - 0.5_dp)
+      ! Update position: x_new = x + v_new*dt
+      x_new = sys%particles(i)%x + vx_new * dt
+      y_new = sys%particles(i)%y + vy_new * dt
 
-      ! Limit displacement for stability
-      if (abs(dx) > dr_max) dx = sign(dr_max, dx)
-      if (abs(dy) > dr_max) dy = sign(dr_max, dy)
-
-      x_new = sys%particles(i)%x + dx
-      y_new = sys%particles(i)%y + dy
-
-      ! Reflective boundary conditions
+      ! Reflective boundary conditions with velocity reversal
       if (x_new > sys%xmax) then
         x_new = 2.0_dp * sys%xmax - x_new
+        vx_new = -vx_new
       else if (x_new < -sys%xmax) then
         x_new = -2.0_dp * sys%xmax - x_new
+        vx_new = -vx_new
       end if
 
       if (y_new > sys%ymax) then
         y_new = 2.0_dp * sys%ymax - y_new
+        vy_new = -vy_new
       else if (y_new < -sys%ymax) then
         y_new = -2.0_dp * sys%ymax - y_new
+        vy_new = -vy_new
       end if
 
-      ! Safety bounds
-      x_new = max(-sys%xmax * 0.99_dp, min(sys%xmax * 0.99_dp, x_new))
-      y_new = max(-sys%ymax * 0.99_dp, min(sys%ymax * 0.99_dp, y_new))
-
+      ! Update particle state
       sys%particles(i)%x = x_new
       sys%particles(i)%y = y_new
+      sys%particles(i)%vx = vx_new
+      sys%particles(i)%vy = vy_new
     end do
 
     ! Update cell assignments
