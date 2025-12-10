@@ -84,7 +84,6 @@ contains
     integer, intent(in) :: nx, ny, p_max, max_part
     integer :: i, j, n, k
     integer :: cell_capacity
-    real(dp) :: safety_factor
 
     sys%xmax = xmax
     sys%ymax = ymax
@@ -103,12 +102,10 @@ contains
     allocate(sys%particles(max_part))
 
     ! Calculate cell capacity based on particle count and grid size
-    safety_factor = 3.0_dp
-    cell_capacity = calculate_cell_capacity(max_part, nx*ny, safety_factor)
+    cell_capacity = calculate_cell_capacity(max_part, nx*ny)
 
     print '(A,I0)', ' Calculated cell capacity: ', cell_capacity
     print '(A,I0)', ' Average particles/cell:   ', max_part/(nx*ny)
-    print '(A,F5.2)', ' Safety factor:            ', safety_factor
 
     ! Initialize cells
     allocate(sys%cells(nx, ny))
@@ -141,16 +138,22 @@ contains
 
   ! ============================================================================
 
-  function calculate_cell_capacity(n_particles, n_cells, safety_factor) result(capacity)
+  function calculate_cell_capacity(n_particles, n_cells) result(capacity)
     integer, intent(in) :: n_particles, n_cells
-    real(dp), intent(in) :: safety_factor
     integer :: capacity
-    integer :: avg_per_cell
 
-    avg_per_cell = ceiling(real(n_particles, dp) / real(n_cells, dp))
-    capacity = ceiling(real(avg_per_cell, dp) * safety_factor)
-    capacity = max(capacity, 100)    ! Minimum capacity
-    capacity = min(capacity, 50000)  ! Maximum capacity
+    ! Simple solution: for small grids, allocate generously
+    ! For large grids, use average * 5 to handle clustering
+    if (n_cells <= 100) then
+      ! Small grid: be generous, allow up to half of all particles per cell
+      capacity = n_particles / 2 + 100
+    else
+      ! Large grid: assume better distribution, use 5x average
+      capacity = (n_particles / n_cells) * 5 + 100
+    end if
+
+    ! Ensure minimum
+    capacity = max(capacity, 200)
   end function calculate_cell_capacity
 
   ! ============================================================================
