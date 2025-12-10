@@ -296,7 +296,7 @@ contains
     integer :: k, j
     real(dp) :: dx, dy, r, binom_coef
     complex(dp) :: z0, z0_scaled, z0_inv_scaled, z0_pow
-    complex(dp) :: temp_sum
+    complex(dp) :: temp_sum, z0_inv_pow_j, z0_inv_pow_jk
 
     ! IMPLEMENTATION based on Flatiron Institute fmm2d library
     ! with GLOBAL rscale normalization for numerical stability
